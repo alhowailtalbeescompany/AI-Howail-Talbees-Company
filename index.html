@@ -9194,6 +9194,124 @@ window.DashboardAPI = (() => {
        تحميل بيانات الداشبورد
     ===================================================== */
 
+
+    /* =====================================================
+       التحصيلات القادمة: لو السيرفر لا يرسلها جاهزة،
+       تُحسب من شيت المستحقات والمتأخرات (الفواتير المستحقة
+       التي لم يحن موعدها بعد).
+    ===================================================== */
+
+    function deriveUpcomingDue(rows) {
+        if (!Array.isArray(rows)) {
+            return [];
+        }
+
+        const pick = (row, keys) => {
+            for (const key of keys) {
+                const value = row?.[key];
+
+                if (value !== undefined && value !== null && String(value).trim() !== "") {
+                    return value;
+                }
+            }
+
+            return null;
+        };
+
+        const toNumber = value => {
+            const number = Number(String(value).replace(/,/g, ""));
+            return Number.isFinite(number) ? number : null;
+        };
+
+        const parseDay = value => {
+            if (!value) return null;
+
+            const text = String(value).trim();
+            let match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+
+            if (match) {
+                return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+            }
+
+            match = text.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+
+            if (match) {
+                return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
+            }
+
+            const date = new Date(text);
+            return Number.isNaN(date.getTime())
+                ? null
+                : new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        };
+
+        const toIso = date =>
+            date.getFullYear() + "-" +
+            String(date.getMonth() + 1).padStart(2, "0") + "-" +
+            String(date.getDate()).padStart(2, "0");
+
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const dayMs = 86400000;
+
+        return rows
+            .map(row => {
+                const status = String(pick(row, ["status", "Status"]) || "").trim().toLowerCase();
+
+                if (status === "overdue" || status === "متأخر") {
+                    return null;
+                }
+
+                const balance = toNumber(pick(row, ["invoiceBalance", "balance", "Inv Balance"]));
+
+                if (!(balance > 0)) {
+                    return null;
+                }
+
+                let remaining = toNumber(pick(row, ["daysRemainingToCollect", "daysUntilDue", "daysToDue"]));
+                let dueDate = parseDay(pick(row, ["dueDate", "Due Date"]));
+
+                if (remaining === null && dueDate) {
+                    remaining = Math.round((dueDate - today) / dayMs);
+                }
+
+                if (remaining === null) {
+                    const invoiceDate = parseDay(pick(row, ["invoiceDate", "Invoice Date", "Inv Date"]));
+                    const termDays = toNumber(pick(row, ["invoiceTermDays", "allowedDays", "allowedCreditDays"]));
+
+                    if (invoiceDate && termDays !== null && termDays > 0) {
+                        dueDate = new Date(invoiceDate.getTime() + termDays * dayMs);
+                        remaining = Math.round((dueDate - today) / dayMs);
+                    }
+                }
+
+                if (remaining === null) {
+                    const allowed = toNumber(pick(row, ["allowedDays", "allowedCreditDays"]));
+                    const age = toNumber(pick(row, ["invoiceAge", "invoiceAgeDays", "daysDue", "agingDays"]));
+
+                    if (allowed !== null && allowed > 0 && age !== null) {
+                        remaining = allowed - age;
+                    }
+                }
+
+                if (remaining === null || remaining < 0) {
+                    return null;
+                }
+
+                if (!dueDate) {
+                    dueDate = new Date(today.getTime() + remaining * dayMs);
+                }
+
+                return {
+                    ...row,
+                    daysRemainingToCollect: remaining,
+                    daysUntilDue: remaining,
+                    dueDate: toIso(dueDate)
+                };
+            })
+            .filter(Boolean);
+    }
+
     async function dashboard(
         token,
         filters = {}
@@ -9316,7 +9434,7 @@ window.DashboardAPI = (() => {
             upcomingDue:
                 Array.isArray(response?.upcomingDue)
                     ? response.upcomingDue
-                    : [],
+                    : deriveUpcomingDue(response?.dueOverdue),
 
             customerNotes: (() => {
                 const notes = Array.isArray(
@@ -9342,7 +9460,8 @@ window.DashboardAPI = (() => {
                         (row.productCode || row.productDescription)
                     ),
                 upcomingDue:
-                    Array.isArray(response?.upcomingDue),
+                    Array.isArray(response?.upcomingDue) ||
+                    deriveUpcomingDue(response?.dueOverdue).length > 0,
                 newCustomers:
                     Array.isArray(response?.newCustomers) &&
                     response.newCustomers.length > 0,
@@ -32693,6 +32812,11 @@ window.DashboardApp = (() => {
 
         setFeatureVisible(
             document.querySelector('.navigation-item[data-page="upcomingCollections"]'),
+            featureState.upcomingDue
+        );
+
+        setFeatureVisible(
+            document.querySelector('.report-card[data-report="upcoming"]'),
             featureState.upcomingDue
         );
 

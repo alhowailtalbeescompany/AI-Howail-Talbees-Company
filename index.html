@@ -4386,6 +4386,14 @@ body.notes-disabled .customer-note-cell,
 body.notes-disabled th[data-i18n="salesmanProfiles.notes"] {
     display: none !important;
 }
+
+.profile-visits-card {
+    margin-bottom: 20px;
+}
+
+.profile-visits-card .table-total-row td {
+    background: var(--surface-soft);
+}
 </style>
 </head>
 
@@ -6516,7 +6524,42 @@ body.notes-disabled th[data-i18n="salesmanProfiles.notes"] {
                                 <strong id="profileReactivatedCustomerCount">0</strong>
                             </article>
 
+                            <article class="profile-kpi-card" data-visits-feature>
+                                <span data-i18n="salesmanProfiles.visits">الزيارات</span>
+                                <strong id="profileVisitsCount">0</strong>
+                            </article>
+
+                            <article class="profile-kpi-card" data-visits-feature>
+                                <span data-i18n="salesmanProfiles.visitConversion">نسبة تحويل الزيارات</span>
+                                <strong id="profileVisitConversion">0%</strong>
+                            </article>
+
                         </div>
+
+                        <article class="content-card profile-visits-card" data-visits-feature>
+                            <div class="card-header page-card-header">
+                                <div>
+                                    <h3 data-i18n="salesmanProfiles.monthlyVisits">الزيارات الشهرية</h3>
+                                    <p data-i18n="salesmanProfiles.monthlyVisitsSubtitle">
+                                        عدد الزيارات والفواتير ونسبة التحويل (الفواتير ÷ الزيارات) لكل شهر
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="table-wrapper">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th data-i18n="salesmanProfiles.month">الشهر</th>
+                                            <th data-i18n="salesmanProfiles.visits">الزيارات</th>
+                                            <th data-i18n="salesmanProfiles.invoicesCount">الفواتير</th>
+                                            <th data-i18n="salesmanProfiles.visitConversion">نسبة تحويل الزيارات</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="profileVisitsTableBody"></tbody>
+                                </table>
+                            </div>
+                        </article>
 
                         <div class="salesman-report-grid">
                             <article class="content-card">
@@ -7529,6 +7572,12 @@ const TRANSLATIONS = {
             customerCount: "عدد العملاء",
             purchasingCustomerCount: "عدد العملاء اللي اشتروا",
             purchasingCustomerPercentage: "نسبة العملاء اللي اشتروا",
+            visits: "الزيارات",
+            visitConversion: "نسبة تحويل الزيارات",
+            monthlyVisits: "الزيارات الشهرية",
+            monthlyVisitsSubtitle: "عدد الزيارات والفواتير ونسبة التحويل (الفواتير ÷ الزيارات) لكل شهر",
+            month: "الشهر",
+            invoicesCount: "الفواتير",
             newCustomers: "العملاء الجدد",
             reactivatedCustomers: "العملاء المعاد تنشيطهم",
             averageInvoice: "متوسط الفاتورة",
@@ -7546,6 +7595,12 @@ const TRANSLATIONS = {
             nextInvoice: "الفاتورة القادمة",
             nextDueDate: "موعد التحصيل",
             customerStatus: "حالة العميل",
+            alertOverdue90: "متأخر أكثر من 90 يومًا",
+            alertOverdue30: "متأخر أكثر من 30 يومًا",
+            alertCreditExceeded: "تجاوز الحد الائتماني",
+            alertLowAchievement: "نسبة تحقيق الهدف أقل من 50%",
+            noAlertsTitle: "لا توجد تنبيهات",
+            noAlerts: "لا توجد تنبيهات لهذا المندوب",
             notes: "ملاحظات",
             addNote: "إضافة",
             editNote: "تعديل",
@@ -7896,6 +7951,12 @@ const TRANSLATIONS = {
             customerCount: "Customer Count",
             purchasingCustomerCount: "Purchasing Customers",
             purchasingCustomerPercentage: "Purchasing %",
+            visits: "Visits",
+            visitConversion: "Visit Conversion",
+            monthlyVisits: "Monthly Visits",
+            monthlyVisitsSubtitle: "Visits, invoices and conversion rate (invoices ÷ visits) per month",
+            month: "Month",
+            invoicesCount: "Invoices",
             newCustomers: "New Customers",
             reactivatedCustomers: "Reactivated Customers",
             averageInvoice: "Average Invoice",
@@ -7913,6 +7974,12 @@ const TRANSLATIONS = {
             nextInvoice: "Next Invoice",
             nextDueDate: "Next Due Date",
             customerStatus: "Customer Status",
+            alertOverdue90: "Overdue more than 90 days",
+            alertOverdue30: "Overdue more than 30 days",
+            alertCreditExceeded: "Credit limit exceeded",
+            alertLowAchievement: "Target achievement below 50%",
+            noAlertsTitle: "No alerts",
+            noAlerts: "No alerts for this salesman",
             notes: "Notes",
             addNote: "Add",
             editNote: "Edit",
@@ -9558,11 +9625,24 @@ window.DashboardAPI = (() => {
                 return notes;
             })(),
 
+            visits: (() => {
+                const visits = Array.isArray(response?.visits)
+                    ? response.visits
+                    : [];
+
+                window.DashboardVisits = visits;
+
+                return visits;
+            })(),
+
             /*
              * الشيتات غير الموجودة في هذا المشروع: الأجزاء التي
              * تعتمد عليها تختفي تلقائيًا بدل ما تظهر فاضية.
              */
             available: {
+                visits:
+                    Array.isArray(response?.visits) &&
+                    response.visits.length > 0,
                 products:
                     Array.isArray(response?.invoices) &&
                     response.invoices.some(row =>
@@ -21226,6 +21306,168 @@ window.DashboardProfiles = (() => {
                   );
     }
 
+    /* =====================================================
+       الزيارات ونسبة التحويل (شيت Visits by Month)
+       نسبة التحويل = عدد الفواتير ÷ عدد الزيارات
+    ===================================================== */
+
+    function getVisitPeriodMonths() {
+        const period = targetsModule?.getPeriod?.();
+
+        if (period && Array.isArray(period.months) && period.months.length) {
+            return period.months.map(item =>
+                `${item.year}-${String(item.month).padStart(2, "0")}`
+            );
+        }
+
+        const now = new Date();
+        return [`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`];
+    }
+
+    function buildVisitStats(code) {
+        const visitRows = Array.isArray(window.DashboardVisits)
+            ? window.DashboardVisits
+            : [];
+
+        if (!visitRows.length) {
+            return null;
+        }
+
+        const targetRow = findTargetRowByCode(code) || {};
+        const codes = getTargetCodes(targetRow).length
+            ? getTargetCodes(targetRow)
+            : [normalizeCode(code)];
+
+        const months = getVisitPeriodMonths();
+        const monthSet = new Set(months);
+
+        const visitsByMonth = new Map();
+
+        visitRows
+            .filter(row => rowBelongsToCodes(row, codes))
+            .forEach(row => {
+                const month = String(row.month || "");
+                visitsByMonth.set(
+                    month,
+                    (visitsByMonth.get(month) || 0) + utils.toNumber(row.visits)
+                );
+            });
+
+        const invoicesByMonth = new Map();
+
+        rawInvoiceRows
+            .filter(row => rowBelongsToCodes(row, codes))
+            .forEach(row => {
+                const date = String(
+                    getValue(row, ["invoiceDate", "Invoice Date", "date"], "")
+                ).slice(0, 7);
+                const invoiceNo = normalizeCode(
+                    getValue(row, ["invoiceNo", "invoiceNumber", "Invoice Number"], "")
+                );
+
+                if (!date || !invoiceNo) {
+                    return;
+                }
+
+                if (!invoicesByMonth.has(date)) {
+                    invoicesByMonth.set(date, new Set());
+                }
+
+                invoicesByMonth.get(date).add(invoiceNo);
+            });
+
+        const monthly = months.map(month => {
+            const visits = visitsByMonth.get(month) || 0;
+            const invoices = invoicesByMonth.get(month)?.size || 0;
+
+            return {
+                month,
+                visits,
+                invoices,
+                conversion: visits > 0 ? (invoices / visits) * 100 : null
+            };
+        });
+
+        const totalVisits = monthly.reduce((sum, item) => sum + item.visits, 0);
+        const totalInvoices = monthly.reduce((sum, item) => sum + item.invoices, 0);
+
+        /*
+         * نسبة التحويل الإجمالية تُحسب من الشهور اللي فيها زيارات
+         * مسجلة فقط، عشان شهر لسه مكتبش فيه زيارات ميرفعش النسبة.
+         */
+        const invoicesInVisitedMonths = monthly
+            .filter(item => item.visits > 0)
+            .reduce((sum, item) => sum + item.invoices, 0);
+
+        return {
+            monthly: monthly.filter(item => monthSet.has(item.month)),
+            totalVisits,
+            totalInvoices,
+            conversion: totalVisits > 0 ? (invoicesInVisitedMonths / totalVisits) * 100 : null
+        };
+    }
+
+    function formatVisitMonth(month) {
+        const [year, monthNumber] = String(month).split("-").map(Number);
+
+        if (!year || !monthNumber) {
+            return month;
+        }
+
+        return new Intl.DateTimeFormat(
+            utils.getLanguage() === "en" ? "en-GB" : "ar-SA-u-ca-gregory-nu-latn",
+            { month: "long", year: "numeric" }
+        ).format(new Date(year, monthNumber - 1, 1));
+    }
+
+    function formatConversion(value) {
+        return value == null ? "—" : `${value.toFixed(1)}%`;
+    }
+
+    function renderVisits(stats) {
+        utils.setText(
+            "profileVisitsCount",
+            stats ? utils.formatNumber(stats.totalVisits, 0) : "—"
+        );
+
+        utils.setText(
+            "profileVisitConversion",
+            stats ? formatConversion(stats.conversion) : "—"
+        );
+
+        const body = utils.byId("profileVisitsTableBody");
+
+        if (!body) {
+            return;
+        }
+
+        if (!stats || !stats.monthly.length) {
+            body.innerHTML = utils.emptyTableRow(
+                4,
+                utils.t("common.noData", "لا توجد بيانات متاحة")
+            );
+            return;
+        }
+
+        body.innerHTML =
+            stats.monthly.map(item => `
+                <tr>
+                    <td>${utils.escapeHTML(formatVisitMonth(item.month))}</td>
+                    <td>${utils.formatNumber(item.visits, 0)}</td>
+                    <td>${utils.formatNumber(item.invoices, 0)}</td>
+                    <td><strong>${formatConversion(item.conversion)}</strong></td>
+                </tr>
+            `).join("") +
+            `
+                <tr class="table-total-row">
+                    <td><strong>${utils.escapeHTML(utils.t("common.total", "الإجمالي"))}</strong></td>
+                    <td><strong>${utils.formatNumber(stats.totalVisits, 0)}</strong></td>
+                    <td><strong>${utils.formatNumber(stats.totalInvoices, 0)}</strong></td>
+                    <td><strong>${formatConversion(stats.conversion)}</strong></td>
+                </tr>
+            `;
+    }
+
     function render() {
         const code =
             getSelectedSalesmanCode();
@@ -21251,6 +21493,9 @@ window.DashboardProfiles = (() => {
         renderMonthlyComparison(profile.monthly);
         renderTrendChart(profile.trend);
         renderSalesmanAlerts(profile.salesmanAlerts);
+
+        profile.visitStats = buildVisitStats(profile.code || code);
+        renderVisits(profile.visitStats);
 
         return profile;
     }
@@ -21688,6 +21933,17 @@ window.DashboardProfiles = (() => {
                         font-size: 10px;
                     }
 
+                    /* العنوان والرسم في نفس الصفحة */
+                    .trend-block {
+                        break-inside: avoid;
+                        page-break-inside: avoid;
+                    }
+
+                    .trend-block h2 {
+                        break-after: avoid;
+                        page-break-after: avoid;
+                    }
+
                     .trend-chart-image {
                         display: block;
                         box-sizing: border-box;
@@ -21909,6 +22165,22 @@ window.DashboardProfiles = (() => {
                         Reactivated Customers:
                         ${utils.formatNumber(profile.reactivatedCustomerCount, 0)}
                     </div>
+
+                    ${
+                        profile.visitStats
+                            ? `
+                                <div>
+                                    Visits:
+                                    ${utils.formatNumber(profile.visitStats.totalVisits, 0)}
+                                </div>
+
+                                <div>
+                                    Visit Conversion:
+                                    ${formatConversion(profile.visitStats.conversion)}
+                                </div>
+                            `
+                            : ""
+                    }
                 </div>
 
                 <h2 style="margin:26px 0 10px;font-size:18px;">Monthly Performance Comparison</h2>
@@ -21931,10 +22203,48 @@ window.DashboardProfiles = (() => {
                 </div>
 
                 ${
+                    profile.visitStats && profile.visitStats.monthly.length
+                        ? `
+                            <div class="trend-block">
+                                <h2 style="margin:26px 0 10px;font-size:18px;">Monthly Visits &amp; Conversion</h2>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Month</th>
+                                            <th>Visits</th>
+                                            <th>Invoices</th>
+                                            <th>Conversion (Invoices ÷ Visits)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${profile.visitStats.monthly.map(item => `
+                                            <tr>
+                                                <td>${utils.escapeHTML(item.month)}</td>
+                                                <td>${utils.formatNumber(item.visits, 0)}</td>
+                                                <td>${utils.formatNumber(item.invoices, 0)}</td>
+                                                <td>${formatConversion(item.conversion)}</td>
+                                            </tr>
+                                        `).join("")}
+                                        <tr>
+                                            <td><strong>Total</strong></td>
+                                            <td><strong>${utils.formatNumber(profile.visitStats.totalVisits, 0)}</strong></td>
+                                            <td><strong>${utils.formatNumber(profile.visitStats.totalInvoices, 0)}</strong></td>
+                                            <td><strong>${formatConversion(profile.visitStats.conversion)}</strong></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        `
+                        : ""
+                }
+
+                ${
                     trendChartImage
                         ? `
-                            <h2 style="margin:26px 0 10px;font-size:18px;">Monthly Sales Trend (Year to Date)</h2>
-                            <img class="trend-chart-image" src="${trendChartImage}">
+                            <div class="trend-block">
+                                <h2 style="margin:26px 0 10px;font-size:18px;">Monthly Sales Trend (Year to Date)</h2>
+                                <img class="trend-chart-image" src="${trendChartImage}">
+                            </div>
                         `
                         : ""
                 }
@@ -32909,6 +33219,7 @@ window.DashboardApp = (() => {
     ===================================================== */
 
     const featureState = {
+        visits: true,
         products: true,
         upcomingDue: true,
         newCustomers: true,
@@ -32966,6 +33277,10 @@ window.DashboardApp = (() => {
             "notes-disabled",
             !featureState.customerNotes
         );
+
+        document.querySelectorAll("[data-visits-feature]").forEach(element => {
+            setFeatureVisible(element, featureState.visits);
+        });
 
         if (
             (!featureState.products && state.currentPage === "products") ||

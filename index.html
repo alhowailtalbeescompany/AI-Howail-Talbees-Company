@@ -9312,6 +9312,95 @@ window.DashboardAPI = (() => {
             .filter(Boolean);
     }
 
+
+    /* =====================================================
+       تصنيف المستحق / المتأخر (مشروع التلبيس)
+       نفس قاعدة النسخة السابقة: الفاتورة متأخرة لو
+       - الحالة القادمة من الشيت "overdue"، أو
+       - أيام التأخير > 0، أو
+       - عمر الفاتورة أكبر من الأيام المسموحة.
+    ===================================================== */
+
+    function classifyDueOverdue(rows) {
+        if (!Array.isArray(rows)) {
+            return rows;
+        }
+
+        const pick = (row, keys) => {
+            for (const key of keys) {
+                const value = row?.[key];
+
+                if (value !== undefined && value !== null && String(value).trim() !== "") {
+                    return value;
+                }
+            }
+
+            return null;
+        };
+
+        const num = value => {
+            const number = Number(String(value ?? "").replace(/,/g, ""));
+            return Number.isFinite(number) ? number : 0;
+        };
+
+        return rows.map(row => {
+            if (!row || typeof row !== "object") {
+                return row;
+            }
+
+            const allowedDays = num(pick(row, ["allowedDays", "allowedCreditDays", "Allowed Days"]));
+            const invoiceAge = num(pick(row, ["invoiceAge", "invoiceAgeDays", "agingDays", "outstandingDays", "daysDue", "Invoice Age"]));
+            const suppliedOverdueDays = num(pick(row, ["overdueDays", "Overdue Days"]));
+            const statusText = String(pick(row, ["status", "Status"]) || "")
+                .trim()
+                .toLowerCase()
+                .replace(/\s+/g, "");
+
+            const overdueDays = Math.max(
+                suppliedOverdueDays,
+                invoiceAge - allowedDays,
+                0
+            );
+
+            const isOverdue =
+                statusText === "overdue" ||
+                statusText === "متأخر" ||
+                overdueDays > 0;
+
+            if (!isOverdue) {
+                /*
+                 * الأيام المتبقية للتحصيل = الأيام المسموحة - عمر الفاتورة
+                 * (لو الشيت لا يرسل عمود الأيام المتبقية).
+                 */
+                const suppliedRemaining = pick(row, ["daysRemainingToCollect", "daysUntilDue"]);
+                const remaining =
+                    allowedDays > 0 && invoiceAge > 0
+                        ? Math.max(allowedDays - invoiceAge, 0)
+                        : (suppliedRemaining === null ? null : Math.max(num(suppliedRemaining), 0));
+
+                return remaining === null
+                    ? { ...row, status: "due" }
+                    : {
+                          ...row,
+                          status: "due",
+                          overdueDays: 0,
+                          daysRemainingToCollect: remaining,
+                          daysUntilDue: remaining
+                      };
+            }
+
+            const days = Math.max(overdueDays, 1);
+
+            return {
+                ...row,
+                status: "overdue",
+                overdueDays: days,
+                daysRemainingToCollect: -days,
+                daysUntilDue: -days
+            };
+        });
+    }
+
     async function dashboard(
         token,
         filters = {}
@@ -9358,6 +9447,27 @@ window.DashboardAPI = (() => {
             await request(parameters, {
                 timeout: 60000
             });
+
+        /*
+         * Code.gs 2.2+ يحسب المستحق/المتأخر من تاريخ الاستحقاق،
+         * فنعتمد على حسابه. التصنيف المحلي للنسخ الأقدم فقط.
+         */
+        const backendVersion = String(response?.version || "")
+            .split(".")
+            .map(Number);
+
+        const backendHandlesDueDate =
+            backendVersion[0] > 2 ||
+            (backendVersion[0] === 2 && backendVersion[1] >= 2);
+
+        if (
+            response &&
+            Array.isArray(response.dueOverdue) &&
+            !backendHandlesDueDate
+        ) {
+            response.dueOverdue =
+                classifyDueOverdue(response.dueOverdue);
+        }
 
         /*
          * الاستجابة الصحيحة من Code.gs تحتوي مباشرة على:
@@ -19866,6 +19976,24 @@ window.DashboardProfiles = (() => {
                             "salesmanProfiles.alertOverdue30",
                             "متأخر أكثر من 30 يومًا"
                         )} (${utils.formatCurrency(customer.overdue)})`
+                    });
+                } else {
+                    /* أي عميل عليه متأخرات يظهر في التنبيهات */
+                    const days = Math.max(
+                        Math.round(utils.toNumber(customer.overdueDays)),
+                        0
+                    );
+                    const isArabic = utils.getLanguage() !== "en";
+
+                    alerts.push({
+                        level: "warning",
+                        icon: "fa-clock",
+                        title: customer.customerName,
+                        text: `${
+                            isArabic
+                                ? `عليه متأخرات${days ? ` منذ ${days} يوم` : ""}`
+                                : `Overdue${days ? ` for ${days} days` : ""}`
+                        } (${utils.formatCurrency(customer.overdue)})`
                     });
                 }
 

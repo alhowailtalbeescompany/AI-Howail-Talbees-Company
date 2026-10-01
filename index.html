@@ -22219,7 +22219,10 @@ window.DashboardProfiles = (() => {
                                     <tbody>
                                         ${profile.visitStats.monthly.map(item => `
                                             <tr>
-                                                <td>${utils.escapeHTML(item.month)}</td>
+                                                <td>${utils.escapeHTML(
+                                                    new Intl.DateTimeFormat("en-GB", { month: "short", year: "numeric" })
+                                                        .format(new Date(Number(item.month.slice(0, 4)), Number(item.month.slice(5, 7)) - 1, 1))
+                                                )}</td>
                                                 <td>${utils.formatNumber(item.visits, 0)}</td>
                                                 <td>${utils.formatNumber(item.invoices, 0)}</td>
                                                 <td>${formatConversion(item.conversion)}</td>
@@ -30005,6 +30008,9 @@ window.DashboardPresentation = (() => {
             salesmenSub: "مرتبون حسب نسبة تحقيق الهدف",
             salesman: "المندوب",
             noTarget: "بدون هدف",
+            visits: "الزيارات",
+            visitConversion: "تحويل الزيارات",
+            hlConversion: "أعلى تحويل للزيارات: {name} ({branch}) بنسبة {pct}.",
             branchRank: "المركز {rank} من {total} حسب صافي المبيعات",
             branchCustomers: "{new} عميل جديد و{re} معاد تنشيطه",
             branchSalesmen: "المندوبون",
@@ -30092,6 +30098,9 @@ window.DashboardPresentation = (() => {
             salesmenSub: "Ranked by target achievement",
             salesman: "Salesman",
             noTarget: "No target",
+            visits: "Visits",
+            visitConversion: "Visit conversion",
+            hlConversion: "Best visit conversion: {name} ({branch}) at {pct}.",
             branchRank: "Rank {rank} of {total} by net sales",
             branchCustomers: "{new} new and {re} reactivated customers",
             branchSalesmen: "Salesmen",
@@ -30347,6 +30356,25 @@ window.DashboardPresentation = (() => {
         return toNum(row["monthlyTargetQ" + quarter]);
     }
 
+    function monthKeysBetween(from, to) {
+        const keys = [];
+        let year = Number(String(from).slice(0, 4));
+        let month = Number(String(from).slice(5, 7));
+        const endYear = Number(String(to).slice(0, 4));
+        const endMonth = Number(String(to).slice(5, 7));
+
+        while ((year < endYear || (year === endYear && month <= endMonth)) && keys.length < 120) {
+            keys.push(`${year}-${String(month).padStart(2, "0")}`);
+            month += 1;
+            if (month > 12) {
+                month = 1;
+                year += 1;
+            }
+        }
+
+        return keys;
+    }
+
     function agingIndex(row) {
         if (String(row.status || "").toLowerCase() !== "overdue") {
             return 0;
@@ -30373,6 +30401,8 @@ window.DashboardPresentation = (() => {
             quantity: 0,
             newCustomers: 0,
             reactivated: 0,
+            visits: 0,
+            visitInvoices: 0,
             invoiceSet: new Set(),
             customerSet: new Set(),
             aging: [0, 0, 0, 0, 0, 0],
@@ -30455,7 +30485,12 @@ window.DashboardPresentation = (() => {
                     target: 0,
                     collections: 0,
                     outstanding: 0,
-                    overdue: 0
+                    overdue: 0,
+                    visits: 0,
+                    visitInvoices: 0,
+                    conversion: null,
+                    visitMonths: new Set(),
+                    invoiceMonths: new Map()
                 };
                 salesmen.set(key, salesman);
             } else if (salesman.name === salesman.code && clean(name)) {
@@ -30495,7 +30530,18 @@ window.DashboardPresentation = (() => {
                 addKeyed(aggregate.productSales, productKey, productLabel, amount, quantity);
             });
 
-            salesmanOf(row.salesmanCode, row.salesmanName, row.branch).sales += amount;
+            const invoiceSalesman = salesmanOf(row.salesmanCode, row.salesmanName, row.branch);
+            invoiceSalesman.sales += amount;
+
+            const invoiceMonth = String(row.invoiceDate || "").slice(0, 7);
+
+            if (invoiceKey && invoiceMonth) {
+                if (!invoiceSalesman.invoiceMonths.has(invoiceMonth)) {
+                    invoiceSalesman.invoiceMonths.set(invoiceMonth, new Set());
+                }
+
+                invoiceSalesman.invoiceMonths.get(invoiceMonth).add(invoiceKey);
+            }
         });
 
         collections.forEach(row => {
@@ -30547,6 +30593,48 @@ window.DashboardPresentation = (() => {
             company.reactivated += 1;
         });
 
+        /*
+         * الزيارات (شيت Visits by Month) للفترة المختارة.
+         * التحويل = فواتير الشهور اللي فيها زيارات ÷ الزيارات.
+         */
+        const monthKeySet = new Set(monthKeysBetween(period.from, period.to));
+        const visitRows = Array.isArray(window.DashboardVisits) ? window.DashboardVisits : [];
+        let hasVisits = false;
+
+        visitRows.forEach(row => {
+            const code = clean(row.salesmanCode);
+            const month = String(row.month || "");
+            const visits = toNum(row.visits);
+
+            if (!code || !salesmen.has(code) || !monthKeySet.has(month) || !(visits > 0)) {
+                return;
+            }
+
+            const salesman = salesmen.get(code);
+            salesman.visits += visits;
+            salesman.visitMonths.add(month);
+            hasVisits = true;
+        });
+
+        salesmen.forEach(salesman => {
+            salesman.visitInvoices = [...salesman.visitMonths].reduce(
+                (sum, month) => sum + (salesman.invoiceMonths.get(month)?.size || 0),
+                0
+            );
+            salesman.conversion = salesman.visits > 0
+                ? (salesman.visitInvoices / salesman.visits) * 100
+                : null;
+
+            if (salesman.visits > 0) {
+                [branches.get(salesman.branch), company].forEach(aggregate => {
+                    if (aggregate) {
+                        aggregate.visits += salesman.visits;
+                        aggregate.visitInvoices += salesman.visitInvoices;
+                    }
+                });
+            }
+        });
+
         const branchList = [...branches.values()]
             .filter(branch =>
                 branch.sales ||
@@ -30570,7 +30658,8 @@ window.DashboardPresentation = (() => {
             company,
             branches: branchList,
             salesmen: salesmanList,
-            scopeBranch: clean(data.filters?.branch)
+            scopeBranch: clean(data.filters?.branch),
+            hasVisits
         };
     }
 
@@ -30662,6 +30751,20 @@ window.DashboardPresentation = (() => {
             }));
         }
 
+        if (model.hasVisits) {
+            const topConverter = model.salesmen
+                .filter(salesman => salesman.visits >= 20 && salesman.conversion != null)
+                .sort((a, b) => b.conversion - a.conversion)[0];
+
+            if (topConverter) {
+                items.push(tx("hlConversion", {
+                    name: topConverter.name,
+                    branch: topConverter.branch,
+                    pct: fmtPct(topConverter.conversion)
+                }));
+            }
+        }
+
         if (has("newCustomers") || has("reactivatedCustomers")) {
             items.push(tx("hlCustomers", {
                 new: fmtInt(model.company.newCustomers),
@@ -30709,6 +30812,12 @@ window.DashboardPresentation = (() => {
             [tx("activeCustomers"), fmtInt(company.customerSet.size)],
             has("newCustomers") ? [tx("newCustomers"), fmtInt(company.newCustomers)] : null,
             has("reactivatedCustomers") ? [tx("reactivated"), fmtInt(company.reactivated)] : null,
+            ...(model.hasVisits
+                ? [
+                      [tx("visits"), fmtInt(company.visits)],
+                      [tx("visitConversion"), fmtPct(ratio(company.visitInvoices, company.visits))]
+                  ]
+                : []),
             [tx("quantity"), fmtInt(company.quantity)]
         ].filter(Boolean);
 
@@ -30885,7 +30994,9 @@ window.DashboardPresentation = (() => {
                             <th class="n">${esc(tx("target"))}</th>
                             <th>${esc(tx("achievement"))}</th>
                             <th class="n">${esc(tx("collections"))}</th>
-                            <th class="n">${esc(tx("outstanding"))}</th>
+                            ${model.hasVisits
+                                ? `<th class="n">${esc(tx("visits"))}</th><th class="n">${esc(tx("visitConversion"))}</th>`
+                                : `<th class="n">${esc(tx("outstanding"))}</th>`}
                             <th class="n">${esc(tx("overdue"))}</th>
                         </tr>
                     </thead>
@@ -30899,9 +31010,11 @@ window.DashboardPresentation = (() => {
                                 <td class="n">${salesman.target > 0 ? fmtInt(salesman.target) : `<span class="pz-muted">${esc(tx("noTarget"))}</span>`}</td>
                                 <td>${meter(ratio(salesman.sales, salesman.target))}</td>
                                 <td class="n">${fmtInt(salesman.collections)}</td>
-                                <td class="n">${fmtInt(salesman.outstanding)}</td>
+                                ${model.hasVisits
+                                    ? `<td class="n">${salesman.visits ? fmtInt(salesman.visits) : "—"}</td><td class="n pz-strong">${fmtPct(salesman.conversion)}</td>`
+                                    : `<td class="n">${fmtInt(salesman.outstanding)}</td>`}
                                 <td class="n">${fmtInt(salesman.overdue)}</td>
-                            </tr>`).join("") : emptyRow(9)}
+                            </tr>`).join("") : emptyRow(model.hasVisits ? 10 : 9)}
                     </tbody>
                 </table>`
         }));
@@ -30941,25 +31054,27 @@ window.DashboardPresentation = (() => {
                     <div class="pz-col">
                         <div>
                             <h3 class="pz-h3">${esc(tx("branchSalesmen"))}</h3>
-                            <table class="pz-table is-medium">
+                            <table class="pz-table ${model.hasVisits ? "is-small is-tight" : "is-medium"}">
                                 <thead>
                                     <tr>
                                         <th>${esc(tx("salesman"))}</th>
                                         <th class="n">${esc(tx("sales"))}</th>
                                         <th>${esc(tx("achievement"))}</th>
                                         <th class="n">${esc(tx("collections"))}</th>
+                                        ${model.hasVisits ? `<th class="n">${esc(tx("visitConversion"))}</th>` : ""}
                                         <th class="n">${esc(tx("overdue"))}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${salesmen.length ? salesmen.map(salesman => `
                                         <tr>
-                                            <td class="pz-strong" style="--clip:170px">${clip(salesman.name)}</td>
+                                            <td class="pz-strong" style="--clip:${model.hasVisits ? 130 : 170}px">${clip(salesman.name)}</td>
                                             <td class="n">${fmtInt(salesman.sales)}</td>
                                             <td>${salesman.target > 0 ? meter(ratio(salesman.sales, salesman.target)) : `<span class="pz-muted">${esc(tx("noTarget"))}</span>`}</td>
                                             <td class="n">${fmtInt(salesman.collections)}</td>
+                                            ${model.hasVisits ? `<td class="n">${fmtPct(salesman.conversion)}</td>` : ""}
                                             <td class="n">${fmtInt(salesman.overdue)}</td>
-                                        </tr>`).join("") : emptyRow(5)}
+                                        </tr>`).join("") : emptyRow(model.hasVisits ? 6 : 5)}
                                 </tbody>
                             </table>
                         </div>
@@ -31313,6 +31428,9 @@ html[lang="en"] body { font-family: "Inter", "Cairo", "Segoe UI", sans-serif; }
 .pz-table.is-medium { font-size: 13px; }
 .pz-table.is-medium td { padding: 7px 9px; }
 .pz-table.is-small { font-size: 12px; }
+.pz-table.is-tight th, .pz-table.is-tight td { padding-left: 5px; padding-right: 5px; }
+.pz-table.is-tight .pz-meter { min-width: 84px; gap: 5px; }
+.pz-table.is-tight .pz-meter b { min-width: 40px; }
 .pz-table.is-small th { padding: 6px 8px; }
 .pz-table.is-small td { padding: 5px 8px; }
 .pz-empty-cell { text-align: center; color: #8595a2; padding: 14px 8px; }
